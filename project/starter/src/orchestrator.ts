@@ -1,33 +1,59 @@
-import { ReviewReport } from './types/report-types';
+import { query } from '@anthropic-ai/claude-agent-sdk';
+import { ReviewReport, ReviewReportJSONSchema } from './types/report-types';
+import { mcpServersConfig } from './config/mcp.config';
+import { ORCHESTRATOR_PROMPT } from './prompts/orchestrator.prompt';
+import {
+  codeQualityAnalyzer,
+  testCoverageAnalyzer,
+  refactoringSuggester,
+} from './agents';
 
-/**
- * Orchestrator configuration options
- */
 export interface OrchestratorOptions {
+  model?: string;
 }
 
-/**
- * Main Code Review Orchestrator
- * Coordinates subagents to analyze pull requests and generate comprehensive reports
- */
 export class CodeReviewOrchestrator {
-
+  private readonly model: string;
 
   constructor(options: OrchestratorOptions = {}) {
+    this.model = options.model || process.env.ANTHROPIC_MODEL || 'sonnet';
   }
 
-  /**
-   * Review a pull request using parallel subagent analysis
-   * @param owner - Repository owner
-   * @param repo - Repository name
-   * @param prNumber - Pull request number
-   * @returns Complete review report
-   */
   async reviewPullRequest(
     owner: string,
     repo: string,
     prNumber: number
   ): Promise<ReviewReport> {
-    throw new Error('Not implemented');
+    const prompt = `${ORCHESTRATOR_PROMPT}
+
+Repository: ${owner}/${repo}
+Pull Request: #${prNumber}
+`;
+
+    const result = query({
+      prompt,
+      options: {
+        allowedTools: ['Task'],
+        model: this.model,
+        mcpServers: mcpServersConfig,
+        agents: {
+          codeQualityAnalyzer,
+          testCoverageAnalyzer,
+          refactoringSuggester,
+        },
+        outputFormat: {
+          type: 'json_schema',
+          schema: ReviewReportJSONSchema,
+        },
+      },
+    });
+
+    for await (const message of result) {
+      if (message.type === 'result' && message.subtype === 'success') {
+        return message.structured_output as ReviewReport;
+      }
+    }
+
+    throw new Error('Code review did not produce a structured report.');
   }
 }
